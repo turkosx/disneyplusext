@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Disney+ Tela Cheia Automatica",
+  "name": "Disney+ Tela Cheia Automática",
   "version": "0.1.0",
   "description": "Volta para a tela cheia no player da Disney+ com controles simples.",
   "icons": {
@@ -10,7 +10,8 @@
     "128": "src/assets/icons/icon-128.png"
   },
   "permissions": [
-    "storage"
+    "storage",
+    "windows"
   ],
   "host_permissions": [
     "https://www.disneyplus.com/*"

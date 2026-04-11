@@ -1,9 +1,17 @@
 const DEFAULT_SETTINGS = {
   enabled: true,
   autoFullscreenOnEpisodeChange: true,
+  autoSkipIntro: true,
+  autoPlayNextEpisode: false,
   retryFullscreenWhilePlayerLoads: true,
   debugLogs: false,
 };
+
+const CORE_AUTOMATION_KEYS = [
+  "autoFullscreenOnEpisodeChange",
+  "autoSkipIntro",
+  "autoPlayNextEpisode",
+];
 
 const toggleElements = [...document.querySelectorAll("[data-setting-key]")];
 const statusTextElement = document.querySelector("#statusText");
@@ -69,21 +77,19 @@ function syncToggles(settings) {
 
 function renderStatus(settings) {
   if (!settings.enabled) {
-    statusTextElement.textContent = "Automacoes desligadas para DisneyPlus.com.";
+    statusTextElement.textContent = "Tudo desligado.";
     return;
   }
 
-  const activeAutomations = Object.entries(settings)
-    .filter(([key, value]) => key !== "enabled" && Boolean(value))
-    .length;
+  const activeAutomations = CORE_AUTOMATION_KEYS.filter((key) => Boolean(settings[key])).length;
 
   if (activeAutomations === 0) {
-    statusTextElement.textContent = "Extensao ativa, mas sem automacoes ligadas.";
+    statusTextElement.textContent = "Sem funções ativas.";
     return;
   }
 
   statusTextElement.textContent =
     activeAutomations === 1
-      ? "1 automacao ativa e pronta para o player."
-      : `${activeAutomations} automacoes ativas e prontas para o player.`;
+      ? "1 função ativa."
+      : `${activeAutomations} funções ativas.`;
 }

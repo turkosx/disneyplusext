@@ -14,57 +14,59 @@
           <img
             class="hero-logo"
             src="../assets/icons/icon-128.png"
-            alt="Logo da extensao Disney+ Tela Cheia"
+            alt="Logo da extensão Disney+ Tela Cheia"
           />
           <p class="eyebrow">DisneyPlus.com</p>
         </div>
-        <h1>Tela cheia automatica</h1>
-        <p class="subtitle">
-          Deixe o video da Disney+ tentar voltar sozinho para a tela cheia ao trocar de episodio.
-        </p>
+        <h1>Disney+ AutoScreen</h1>
       </section>
 
       <section class="status-card">
-        <p class="status-label">Status atual</p>
-        <p class="status-value" id="statusText">Carregando configuracoes...</p>
+        <p class="status-label">Status</p>
+        <p class="status-value" id="statusText">Carregando configurações...</p>
       </section>
 
       <section class="toggle-list">
         <label class="toggle-row">
-          <span class="toggle-copy">
-            <strong>Automacao geral</strong>
-            <small>Liga ou desliga todas as automacoes da extensao.</small>
-          </span>
+          <span class="toggle-copy"><strong>Automação</strong></span>
           <input type="checkbox" data-setting-key="enabled" />
         </label>
 
         <label class="toggle-row">
-          <span class="toggle-copy">
-            <strong>Tela cheia ao trocar episodio</strong>
-            <small>Tenta voltar para a tela cheia quando o player muda de episodio.</small>
-          </span>
+          <span class="toggle-copy"><strong>Tela cheia</strong></span>
           <input type="checkbox" data-setting-key="autoFullscreenOnEpisodeChange" />
         </label>
 
         <label class="toggle-row">
-          <span class="toggle-copy">
-            <strong>Repetir tentativa</strong>
-            <small>Faz novas tentativas enquanto o proximo episodio carrega.</small>
-          </span>
+          <span class="toggle-copy"><strong>Pular introdução</strong></span>
+          <input type="checkbox" data-setting-key="autoSkipIntro" />
+        </label>
+
+        <label class="toggle-row">
+          <span class="toggle-copy"><strong>Pular encerramento</strong></span>
+          <input type="checkbox" data-setting-key="autoPlayNextEpisode" />
+        </label>
+
+        <label class="toggle-row">
+          <span class="toggle-copy"><strong>Repetir tentativa</strong></span>
           <input type="checkbox" data-setting-key="retryFullscreenWhilePlayerLoads" />
         </label>
 
         <label class="toggle-row">
-          <span class="toggle-copy">
-            <strong>Modo de verificacao</strong>
-            <small>Use so se quiser checar melhor o funcionamento.</small>
-          </span>
+          <span class="toggle-copy"><strong>Verificação</strong></span>
           <input type="checkbox" data-setting-key="debugLogs" />
         </label>
       </section>
-
-      <footer class="footer-note">
-        Tudo pronto para usar. Se quiser investigar algo, ligue o modo de verificacao.
+      <footer class="meta-pills" aria-label="Contatos">
+        <a
+          class="meta-pill"
+          href="https://github.com/turkosx"
+          target="_blank"
+          rel="noreferrer"
+        >
+          GitHub: turkosx
+        </a>
+        <span class="meta-pill">Discord: @tur.ko</span>
       </footer>
     </main>
   </body>
