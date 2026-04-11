@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Disney+ Tela Cheia Automatica",
+  "version": "0.1.0",
+  "description": "Volta para a tela cheia no player da Disney+ com controles simples.",
+  "icons": {
+    "16": "src/assets/icons/icon-16.png",
+    "32": "src/assets/icons/icon-32.png",
+    "48": "src/assets/icons/icon-48.png",
+    "128": "src/assets/icons/icon-128.png"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://www.disneyplus.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background/service-worker.js"
+  },
+  "action": {
+    "default_title": "Disney+ Tela Cheia",
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "src/assets/icons/icon-16.png",
+      "32": "src/assets/icons/icon-32.png",
+      "48": "src/assets/icons/icon-48.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.disneyplus.com/*"
+      ],
+      "js": [
+        "src/content/disneyplus.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
