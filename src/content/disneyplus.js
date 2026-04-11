@@ -36,6 +36,13 @@
     'button[title*="tela cheia" i]',
   ];
 
+  const PLAY_PAUSE_BUTTON_SELECTORS = [
+    "toggle-play-pause",
+    ".toggle-play-pause",
+    '[aria-label*="pause" i]',
+    '[aria-label*="play" i]',
+  ];
+
   const NEXT_EPISODE_SELECTORS = [
     ".controls__footer__interstitial_container play-next",
     ".controls__footer__interstitial_container .play-next",
@@ -118,6 +125,8 @@
   const EPISODE_TRANSITION_WINDOW_MS = 20000;
   const ENDING_SKIP_WINDOW_SEC = 35;
   const ENDING_SKIP_MIN_PROGRESS = 0.94;
+  const PAUSE_EXIT_GRACE_MS = 5000;
+  const PAUSE_INTENT_WINDOW_MS = 1500;
   const ACTION_THROTTLE_MS = {
     skipIntro: 1200,
     playNextEpisode: 2000,
@@ -136,6 +145,9 @@
     episodeTransitionUntil: 0,
     shouldRestoreFullscreen: false,
     sweepInFlight: false,
+    pauseFullscreenLock: false,
+    pauseIntentUntil: 0,
+    suppressPauseFullscreenExitUntil: 0,
     playbackKey: "",
     handledActionKeys: new Set(),
     lastActionAt: {
@@ -155,6 +167,7 @@
     installMutationObserver();
     installFullscreenWatcher();
     installFullscreenIntentTracker();
+    installPlayPauseIntentTracker();
     startAutomationTicker();
     bindCurrentVideo();
     syncPlaybackKey("startup");
@@ -330,6 +343,29 @@
     syncFullscreenIntent("startup");
   }
 
+  function installPlayPauseIntentTracker() {
+    document.addEventListener(
+      "click",
+      (event) => {
+        const target = event.target;
+
+        if (!(target instanceof Element)) {
+          return;
+        }
+
+        if (!matchesSelectorOrClosest(target, PLAY_PAUSE_BUTTON_SELECTORS)) {
+          return;
+        }
+
+        state.pauseIntentUntil = Date.now() + PAUSE_INTENT_WINDOW_MS;
+        log("Intencao de play/pause detectada.", {
+          until: state.pauseIntentUntil,
+        });
+      },
+      true
+    );
+  }
+
   function bindCurrentVideo() {
     const nextVideo = findCurrentVideo();
 
@@ -345,6 +381,16 @@
     const onPlaybackSignal = (event) => {
       syncPlaybackKey(`video:${event.type}`);
 
+      if (event.type === "play" || event.type === "playing") {
+        state.pauseFullscreenLock = false;
+        state.pauseIntentUntil = 0;
+      }
+
+      if (event.type === "pause") {
+        state.pauseFullscreenLock = true;
+        void handlePausedPlayback(`video:${event.type}`);
+      }
+
       if (event.type === "ended" || event.type === "emptied") {
         markEpisodeTransition(`video:${event.type}`);
       }
@@ -353,7 +399,7 @@
       log("Evento do video detectado.", { type: event.type });
     };
 
-    for (const eventName of ["loadedmetadata", "play", "playing", "ended", "emptied"]) {
+    for (const eventName of ["loadedmetadata", "play", "playing", "pause", "ended", "emptied"]) {
       nextVideo.addEventListener(eventName, onPlaybackSignal);
       state.videoListeners.push([eventName, onPlaybackSignal]);
     }
@@ -484,6 +530,7 @@
     triggerClick(target);
     noteAction("playNextEpisode");
     markActionHandled("playNextEpisode", target);
+    state.suppressPauseFullscreenExitUntil = Date.now() + PAUSE_EXIT_GRACE_MS;
     markEpisodeTransition("play-next-click");
     log("Clique em pular encerramento executado.", {
       reason,
@@ -509,6 +556,11 @@
     if (isPlayerFullscreenActive()) {
       state.shouldRestoreFullscreen = true;
       log("Tela cheia ja esta ativa.", { reason });
+      return false;
+    }
+
+    if (state.pauseFullscreenLock || isPlaybackPaused()) {
+      log("Tela cheia ignorada porque o video esta pausado.", { reason });
       return false;
     }
 
@@ -1015,6 +1067,54 @@
     );
   }
 
+  async function handlePausedPlayback(reason) {
+    if (
+      !state.settings.enabled ||
+      !state.settings.autoFullscreenOnEpisodeChange ||
+      !isPlaybackPaused()
+    ) {
+      return false;
+    }
+
+    if (
+      Date.now() <= state.suppressPauseFullscreenExitUntil &&
+      !hasRecentPauseIntent()
+    ) {
+      log("Pausa ignorada durante automacao de troca.", {
+        reason,
+        until: state.suppressPauseFullscreenExitUntil,
+      });
+      return false;
+    }
+
+    state.shouldRestoreFullscreen = false;
+    state.episodeTransitionUntil = 0;
+    clearPendingAttempts();
+
+    const exitedFullscreen = await exitFullscreenModes(reason);
+
+    if (exitedFullscreen) {
+      log("Tela cheia encerrada porque o video foi pausado.", { reason });
+    }
+
+    return exitedFullscreen;
+  }
+
+  function hasRecentPauseIntent() {
+    return Date.now() <= state.pauseIntentUntil;
+  }
+
+  function isPlaybackPaused() {
+    const video = state.currentVideo || findCurrentVideo();
+
+    return Boolean(
+      video instanceof HTMLVideoElement &&
+        video.paused &&
+        !video.ended &&
+        video.readyState > 0
+    );
+  }
+
   function startAutomationTicker() {
     if (state.automationTickerId !== null) {
       return;
@@ -1116,6 +1216,72 @@
       });
     } catch (error) {
       log("Nao foi possivel pedir tela cheia da janela.", {
+        reason,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return false;
+  }
+
+  async function exitFullscreenModes(reason) {
+    let exitedAnyMode = false;
+
+    if (document.fullscreenElement) {
+      try {
+        await document.exitFullscreen();
+        exitedAnyMode = true;
+      } catch (error) {
+        log("Nao foi possivel sair da tela cheia nativa.", {
+          reason,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (!document.fullscreenElement && isPlayerFullscreenActive()) {
+      wakePlayerControls();
+      await wait(120);
+
+      const fullscreenButton =
+        findPlayerScopedElement(FULLSCREEN_BUTTON_SELECTORS, true) ||
+        findPlayerScopedElement(FULLSCREEN_BUTTON_SELECTORS, false);
+
+      if (fullscreenButton) {
+        triggerClick(fullscreenButton);
+        await wait(180);
+
+        if (!isPlayerFullscreenActive()) {
+          exitedAnyMode = true;
+        }
+      }
+    }
+
+    const exitedWindowFullscreen = await exitBrowserWindowFullscreen(reason);
+
+    if (exitedAnyMode || exitedWindowFullscreen) {
+      noteAction("fullscreen");
+    }
+
+    return exitedAnyMode || exitedWindowFullscreen;
+  }
+
+  async function exitBrowserWindowFullscreen(reason) {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "exit-window-fullscreen",
+      });
+
+      if (response?.ok) {
+        return Boolean(response.changed);
+      }
+
+      log("Nao foi possivel sair da tela cheia da janela.", {
+        reason,
+        error: response?.error ?? "Resposta desconhecida.",
+      });
+    } catch (error) {
+      log("Falha ao pedir a saida da tela cheia da janela.", {
         reason,
         message: error instanceof Error ? error.message : String(error),
       });
