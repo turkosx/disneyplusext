@@ -4,6 +4,8 @@
     autoFullscreenOnEpisodeChange: true,
     autoSkipIntro: true,
     autoPlayNextEpisode: false,
+    autoPauseEvery90Minutes: false,
+    autoPauseIntervalMinutes: 90,
     retryFullscreenWhilePlayerLoads: true,
     debugLogs: false,
   };
@@ -125,6 +127,11 @@
   const EPISODE_TRANSITION_WINDOW_MS = 20000;
   const ENDING_SKIP_WINDOW_SEC = 35;
   const ENDING_SKIP_MIN_PROGRESS = 0.94;
+  const AUTO_PAUSE_INTERVAL_MINUTES_MIN = 5;
+  const AUTO_PAUSE_INTERVAL_MINUTES_MAX = 360;
+  const AUTO_PAUSE_IDLE_RESET_MS = 5 * 60 * 1000;
+  const AUTO_PAUSE_PROMPT_ID = "disney-plus-helper-auto-pause";
+  const AUTO_PAUSE_PROMPT_STYLE_ID = "disney-plus-helper-auto-pause-style";
   const PAUSE_EXIT_GRACE_MS = 5000;
   const PAUSE_INTENT_WINDOW_MS = 1500;
   const ACTION_THROTTLE_MS = {
@@ -150,6 +157,11 @@
     suppressPauseFullscreenExitUntil: 0,
     playbackKey: "",
     handledActionKeys: new Set(),
+    watchProgressMs: 0,
+    watchProgressLastUpdatedAt: 0,
+    watchIdleSinceAt: 0,
+    autoPausePromptElement: null,
+    autoPausePromptVisible: false,
     lastActionAt: {
       skipIntro: 0,
       playNextEpisode: 0,
@@ -161,6 +173,9 @@
 
   async function initialize() {
     state.settings = await chrome.storage.local.get(DEFAULT_SETTINGS);
+    state.settings.autoPauseIntervalMinutes = sanitizeAutoPauseIntervalMinutes(
+      state.settings.autoPauseIntervalMinutes
+    );
 
     installStorageWatcher();
     patchNavigationEvents();
@@ -188,7 +203,10 @@
           continue;
         }
 
-        state.settings[key] = changes[key].newValue;
+        state.settings[key] =
+          key === "autoPauseIntervalMinutes"
+            ? sanitizeAutoPauseIntervalMinutes(changes[key].newValue)
+            : changes[key].newValue;
         hasRelevantChange = true;
       }
 
@@ -197,6 +215,12 @@
       }
 
       log("Configuracoes atualizadas.", { ...state.settings });
+
+      if (!state.settings.enabled || !state.settings.autoPauseEvery90Minutes) {
+        dismissAutoPausePrompt("settings-changed");
+        resetWatchProgress("settings-changed");
+      }
+
       startAutomationTicker();
       scheduleAutomationSweep("settings-changed");
     });
@@ -215,6 +239,7 @@
       }
 
       state.lastUrl = location.href;
+      dismissAutoPausePrompt(`navigation:${source}`);
       bindCurrentVideo();
       markEpisodeTransition(`navigation:${source}`);
       scheduleAutomationSweep(`navigation:${source}`);
@@ -380,6 +405,7 @@
 
     const onPlaybackSignal = (event) => {
       syncPlaybackKey(`video:${event.type}`);
+      syncWatchProgress(`video:${event.type}`);
 
       if (event.type === "play" || event.type === "playing") {
         state.pauseFullscreenLock = false;
@@ -462,6 +488,15 @@
 
     try {
       syncPlaybackKey(reason);
+      syncWatchProgress(reason);
+
+      if (state.settings.autoPauseEvery90Minutes) {
+        const autoPauseTriggered = await attemptAutoPausePrompt(reason);
+
+        if (autoPauseTriggered) {
+          return;
+        }
+      }
 
       if (isPlayerFullscreenActive()) {
         state.shouldRestoreFullscreen = true;
@@ -769,8 +804,363 @@
     return Boolean(
       state.settings.autoFullscreenOnEpisodeChange ||
         state.settings.autoSkipIntro ||
-        state.settings.autoPlayNextEpisode
+        state.settings.autoPlayNextEpisode ||
+        state.settings.autoPauseEvery90Minutes
     );
+  }
+
+  function shouldTrackWatchProgress() {
+    const video = state.currentVideo || findCurrentVideo();
+
+    return Boolean(
+      state.settings.enabled &&
+        state.settings.autoPauseEvery90Minutes &&
+        !state.autoPausePromptVisible &&
+        video instanceof HTMLVideoElement &&
+        !video.paused &&
+        !video.ended &&
+        video.readyState > 2
+    );
+  }
+
+  function syncWatchProgress(reason) {
+    if (!state.settings.enabled || !state.settings.autoPauseEvery90Minutes) {
+      state.watchProgressLastUpdatedAt = 0;
+      state.watchIdleSinceAt = 0;
+      return state.watchProgressMs;
+    }
+
+    const now = Date.now();
+
+    if (shouldTrackWatchProgress()) {
+      if (
+        state.watchIdleSinceAt > 0 &&
+        now - state.watchIdleSinceAt >= AUTO_PAUSE_IDLE_RESET_MS
+      ) {
+        resetWatchProgress(`${reason}:idle-reset`);
+      }
+
+      if (state.watchProgressLastUpdatedAt > 0) {
+        state.watchProgressMs += now - state.watchProgressLastUpdatedAt;
+      }
+
+      state.watchProgressLastUpdatedAt = now;
+      state.watchIdleSinceAt = 0;
+      return state.watchProgressMs;
+    }
+
+    if (state.watchProgressMs > 0 && state.watchIdleSinceAt === 0) {
+      state.watchIdleSinceAt = now;
+    }
+
+    state.watchProgressLastUpdatedAt = 0;
+    return state.watchProgressMs;
+  }
+
+  function resetWatchProgress(reason) {
+    if (
+      state.watchProgressMs === 0 &&
+      state.watchProgressLastUpdatedAt === 0 &&
+      state.watchIdleSinceAt === 0
+    ) {
+      return;
+    }
+
+    state.watchProgressMs = 0;
+    state.watchProgressLastUpdatedAt = 0;
+    state.watchIdleSinceAt = 0;
+    log("Contador da pausa automatica reiniciado.", { reason });
+  }
+
+  async function attemptAutoPausePrompt(reason) {
+    if (
+      !state.settings.enabled ||
+      !state.settings.autoPauseEvery90Minutes ||
+      !isPlaybackPage()
+    ) {
+      return false;
+    }
+
+    if (state.autoPausePromptVisible) {
+      return true;
+    }
+
+    const video = state.currentVideo || findCurrentVideo();
+
+    if (
+      !(video instanceof HTMLVideoElement) ||
+      video.paused ||
+      video.ended ||
+      state.watchProgressMs < getAutoPauseIntervalMs()
+    ) {
+      return false;
+    }
+
+    state.suppressPauseFullscreenExitUntil = Math.max(
+      state.suppressPauseFullscreenExitUntil,
+      Date.now() + PAUSE_EXIT_GRACE_MS
+    );
+
+    const watchedMs = state.watchProgressMs;
+    video.pause();
+    showAutoPausePrompt();
+    resetWatchProgress("auto-pause-triggered");
+    log("Pausa automatica acionada.", {
+      reason,
+      watchedMs,
+    });
+    return true;
+  }
+
+  function ensureAutoPausePromptStyles() {
+    if (document.getElementById(AUTO_PAUSE_PROMPT_STYLE_ID)) {
+      return;
+    }
+
+    const styleElement = document.createElement("style");
+    styleElement.id = AUTO_PAUSE_PROMPT_STYLE_ID;
+    styleElement.textContent = `
+      #${AUTO_PAUSE_PROMPT_ID} {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background: rgba(4, 7, 18, 0.68);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+      }
+
+      #${AUTO_PAUSE_PROMPT_ID}[hidden] {
+        display: none;
+      }
+
+      #${AUTO_PAUSE_PROMPT_ID} .auto-pause-card {
+        width: min(100%, 420px);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 22px;
+        padding: 24px;
+        color: #f6f8ff;
+        background:
+          radial-gradient(circle at top left, rgba(79, 140, 255, 0.28), transparent 36%),
+          linear-gradient(160deg, rgba(8, 15, 35, 0.96), rgba(11, 27, 58, 0.92));
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+        font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+      }
+
+      #${AUTO_PAUSE_PROMPT_ID} .auto-pause-eyebrow {
+        margin: 0 0 10px;
+        color: rgba(168, 204, 255, 0.9);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+
+      #${AUTO_PAUSE_PROMPT_ID} .auto-pause-title {
+        margin: 0 0 10px;
+        font-size: clamp(26px, 3vw, 34px);
+        line-height: 1.05;
+      }
+
+      #${AUTO_PAUSE_PROMPT_ID} .auto-pause-copy {
+        margin: 0;
+        color: rgba(225, 234, 255, 0.84);
+        font-size: 15px;
+        line-height: 1.45;
+      }
+
+      #${AUTO_PAUSE_PROMPT_ID} .auto-pause-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 20px;
+      }
+
+      #${AUTO_PAUSE_PROMPT_ID} .auto-pause-button {
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 18px;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+        transition:
+          transform 140ms ease,
+          box-shadow 140ms ease,
+          background 140ms ease,
+          color 140ms ease;
+      }
+
+      #${AUTO_PAUSE_PROMPT_ID} .auto-pause-button:hover {
+        transform: translateY(-1px);
+      }
+
+      #${AUTO_PAUSE_PROMPT_ID} .auto-pause-button:focus-visible {
+        outline: 2px solid rgba(189, 219, 255, 0.96);
+        outline-offset: 3px;
+      }
+
+      #${AUTO_PAUSE_PROMPT_ID} .auto-pause-button--primary {
+        color: #071222;
+        background: linear-gradient(180deg, #f8fbff, #cde1ff);
+        box-shadow: 0 10px 22px rgba(67, 113, 195, 0.32);
+      }
+
+      #${AUTO_PAUSE_PROMPT_ID} .auto-pause-button--secondary {
+        color: #f6f8ff;
+        background: rgba(255, 255, 255, 0.1);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+      }
+    `;
+
+    document.documentElement.append(styleElement);
+  }
+
+  function ensureAutoPausePrompt() {
+    ensureAutoPausePromptStyles();
+
+    if (state.autoPausePromptElement?.isConnected) {
+      return state.autoPausePromptElement;
+    }
+
+    const promptElement = document.createElement("div");
+    promptElement.id = AUTO_PAUSE_PROMPT_ID;
+    promptElement.hidden = true;
+    promptElement.innerHTML = `
+      <section class="auto-pause-card" role="dialog" aria-modal="true" aria-labelledby="${AUTO_PAUSE_PROMPT_ID}-title">
+        <p class="auto-pause-eyebrow">Pausa automatica</p>
+        <h2 class="auto-pause-title" id="${AUTO_PAUSE_PROMPT_ID}-title">Voce ainda esta assistindo?</h2>
+        <p class="auto-pause-copy" id="${AUTO_PAUSE_PROMPT_ID}-copy"></p>
+        <div class="auto-pause-actions">
+          <button type="button" class="auto-pause-button auto-pause-button--primary" data-auto-pause-action="resume">
+            Continuar assistindo
+          </button>
+          <button type="button" class="auto-pause-button auto-pause-button--secondary" data-auto-pause-action="dismiss">
+            Manter pausado
+          </button>
+        </div>
+      </section>
+    `;
+
+    promptElement.addEventListener("click", (event) => {
+      const target = event.target;
+
+      if (!(target instanceof Element)) {
+        return;
+      }
+
+      const action = target.getAttribute("data-auto-pause-action");
+
+      if (action === "resume") {
+        void resumeFromAutoPausePrompt();
+        return;
+      }
+
+      if (action === "dismiss") {
+        dismissAutoPausePrompt("manual-dismiss");
+      }
+    });
+
+    document.documentElement.append(promptElement);
+    state.autoPausePromptElement = promptElement;
+    return promptElement;
+  }
+
+  function showAutoPausePrompt() {
+    const promptElement = ensureAutoPausePrompt();
+    const promptCopyElement = promptElement.querySelector(`#${AUTO_PAUSE_PROMPT_ID}-copy`);
+
+    if (promptCopyElement) {
+      promptCopyElement.textContent =
+        `A reproducao foi pausada depois de ${formatAutoPauseIntervalMinutes(
+          state.settings.autoPauseIntervalMinutes
+        )} de reproducao continua.`;
+    }
+
+    promptElement.hidden = false;
+    state.autoPausePromptVisible = true;
+
+    window.requestAnimationFrame(() => {
+      promptElement.querySelector('[data-auto-pause-action="resume"]')?.focus();
+    });
+  }
+
+  function dismissAutoPausePrompt(reason) {
+    if (state.autoPausePromptElement?.isConnected) {
+      state.autoPausePromptElement.hidden = true;
+    }
+
+    if (!state.autoPausePromptVisible) {
+      return;
+    }
+
+    state.autoPausePromptVisible = false;
+    log("Aviso da pausa automatica ocultado.", { reason });
+  }
+
+  async function resumeFromAutoPausePrompt() {
+    dismissAutoPausePrompt("resume");
+
+    const video = state.currentVideo || findCurrentVideo();
+
+    if (!(video instanceof HTMLVideoElement)) {
+      return false;
+    }
+
+    try {
+      await video.play();
+    } catch (error) {
+      log("video.play() falhou ao retomar a reproducao.", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+
+      const playPauseButton =
+        findPlayerScopedElement(PLAY_PAUSE_BUTTON_SELECTORS, true) ||
+        findPlayerScopedElement(PLAY_PAUSE_BUTTON_SELECTORS, false);
+
+      if (playPauseButton) {
+        triggerClick(playPauseButton);
+      } else {
+        return false;
+      }
+    }
+
+    scheduleAutomationSweep("auto-pause-resume");
+    return true;
+  }
+
+  function getAutoPauseIntervalMs() {
+    return sanitizeAutoPauseIntervalMinutes(state.settings.autoPauseIntervalMinutes) * 60 * 1000;
+  }
+
+  function sanitizeAutoPauseIntervalMinutes(value) {
+    const parsedValue = Number(value);
+
+    if (!Number.isFinite(parsedValue)) {
+      return DEFAULT_SETTINGS.autoPauseIntervalMinutes;
+    }
+
+    return Math.min(
+      AUTO_PAUSE_INTERVAL_MINUTES_MAX,
+      Math.max(AUTO_PAUSE_INTERVAL_MINUTES_MIN, Math.round(parsedValue))
+    );
+  }
+
+  function formatAutoPauseIntervalMinutes(value) {
+    const totalMinutes = sanitizeAutoPauseIntervalMinutes(value);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    if (hours === 0) {
+      return `${totalMinutes} min`;
+    }
+
+    if (minutes === 0) {
+      return `${hours}h`;
+    }
+
+    return `${hours}h${String(minutes).padStart(2, "0")}`;
   }
 
   function findVisibleElement(selectors) {
@@ -1408,8 +1798,10 @@
 
   window.disneyPlusHelper = {
     attemptFullscreen,
+    attemptAutoPausePrompt,
     attemptPlayNextEpisode,
     attemptSkipIntro,
+    dismissAutoPausePrompt,
     getSettings: () => ({ ...state.settings }),
     runAutomationSweep,
   };

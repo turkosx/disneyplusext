@@ -3,6 +3,8 @@ const DEFAULT_SETTINGS = {
   autoFullscreenOnEpisodeChange: true,
   autoSkipIntro: true,
   autoPlayNextEpisode: false,
+  autoPauseEvery90Minutes: false,
+  autoPauseIntervalMinutes: 90,
   retryFullscreenWhilePlayerLoads: true,
   debugLogs: false,
 };

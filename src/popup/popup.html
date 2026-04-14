@@ -14,7 +14,7 @@
           <img
             class="hero-logo"
             src="../assets/icons/icon-128.png"
-            alt="Logo da extensão Disney+ Tela Cheia"
+            alt="Logo da extensao Disney+ Tela Cheia"
           />
           <p class="eyebrow">DisneyPlus.com</p>
         </div>
@@ -23,12 +23,12 @@
 
       <section class="status-card">
         <p class="status-label">Status</p>
-        <p class="status-value" id="statusText">Carregando configurações...</p>
+        <p class="status-value" id="statusText">Carregando configuracoes...</p>
       </section>
 
       <section class="toggle-list">
         <label class="toggle-row">
-          <span class="toggle-copy"><strong>Automação</strong></span>
+          <span class="toggle-copy"><strong>Automacao</strong></span>
           <input type="checkbox" data-setting-key="enabled" />
         </label>
 
@@ -38,7 +38,7 @@
         </label>
 
         <label class="toggle-row">
-          <span class="toggle-copy"><strong>Pular introdução</strong></span>
+          <span class="toggle-copy"><strong>Pular introducao</strong></span>
           <input type="checkbox" data-setting-key="autoSkipIntro" />
         </label>
 
@@ -48,12 +48,35 @@
         </label>
 
         <label class="toggle-row">
+          <span class="toggle-copy"><strong>Pausa automatica</strong></span>
+          <input type="checkbox" data-setting-key="autoPauseEvery90Minutes" />
+        </label>
+
+        <label class="input-row" for="autoPauseIntervalMinutes">
+          <span class="toggle-copy">
+            <strong>Intervalo da pausa</strong>
+            <small>Defina entre 5 e 360 minutos</small>
+          </span>
+          <span class="number-field">
+            <input
+              id="autoPauseIntervalMinutes"
+              type="number"
+              min="5"
+              max="360"
+              step="1"
+              inputmode="numeric"
+            />
+            <span>min</span>
+          </span>
+        </label>
+
+        <label class="toggle-row">
           <span class="toggle-copy"><strong>Repetir tentativa</strong></span>
           <input type="checkbox" data-setting-key="retryFullscreenWhilePlayerLoads" />
         </label>
 
         <label class="toggle-row">
-          <span class="toggle-copy"><strong>Verificação</strong></span>
+          <span class="toggle-copy"><strong>Verificacao</strong></span>
           <input type="checkbox" data-setting-key="debugLogs" />
         </label>
       </section>
